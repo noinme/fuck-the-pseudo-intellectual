@@ -1,1 +1,8 @@
+# 本地操作
 git status: 查看文件状态
+git add: 将本地文件添加到暂存区域
+git commit: 提交你刚才 add 的文件，一般我们会用 git commit -m "一些说明" 来添加说明
+
+# 本地与 Github 交互
+git push origin master: 将本地的内容推送到远程
+git pull: 将远程仓库的内容拉取到本地
