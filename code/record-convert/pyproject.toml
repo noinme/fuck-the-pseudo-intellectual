@@ -1,0 +1,11 @@
+[project]
+name = "record-convert"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "alibaba-nls-python-sdk>=1.0.2",
+    "aliyun-python-sdk-core>=2.16.0",
+    "oss2>=2.19.1",
+]

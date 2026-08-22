@@ -1,1 +1,24 @@
 .DS_Store
+
+# record-convert: local audio, generated transcripts, credentials, and caches
+/code/record-convert/resources/
+/code/record-convert/output/
+/code/record-convert/.record-convert-work/
+/code/record-convert/.venv/
+/code/record-convert/.direnv/
+/code/record-convert/.env
+/code/record-convert/.env.*
+!/code/record-convert/.env.example
+/code/record-convert/.envrc
+/code/record-convert/.envrc.private
+/code/record-convert/**/__pycache__/
+/code/record-convert/*.py[oc]
+/code/record-convert/.pytest_cache/
+/code/record-convert/.mypy_cache/
+/code/record-convert/.ruff_cache/
+/code/record-convert/.coverage
+/code/record-convert/htmlcov/
+/code/record-convert/build/
+/code/record-convert/dist/
+/code/record-convert/wheels/
+/code/record-convert/*.egg-info/
