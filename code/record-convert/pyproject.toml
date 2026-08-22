@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-record-convert = "main:main"
+record-convert = "main:cli"
 
 [build-system]
 requires = ["setuptools>=77"]

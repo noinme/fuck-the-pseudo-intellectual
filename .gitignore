@@ -22,3 +22,7 @@
 /code/record-convert/dist/
 /code/record-convert/wheels/
 /code/record-convert/*.egg-info/
+
+# 3-4 月录音转写：仅保留原始录音和最终 TXT，忽略可再生成的中间结果
+/resources/录音/3-4月其他/*.json
+/resources/录音/3-4月其他/*.raw/

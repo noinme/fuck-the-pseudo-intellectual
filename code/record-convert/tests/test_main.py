@@ -1,11 +1,41 @@
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
 
 import main
 
 
 class TranscriptTests(unittest.TestCase):
+    def test_cli_hides_exception_details(self):
+        stderr = io.StringIO()
+        with patch.object(
+            main,
+            "main",
+            side_effect=RuntimeError("AccessKeyId=visible&Signature=secret"),
+        ), redirect_stderr(stderr):
+            self.assertEqual(main.cli(), 1)
+        self.assertNotIn("visible", stderr.getvalue())
+        self.assertNotIn("secret", stderr.getvalue())
+
+    def test_retry_call_retries_then_returns(self):
+        calls = 0
+
+        def flaky_action():
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise TimeoutError("temporary")
+            return "ok"
+
+        self.assertEqual(
+            main.retry_call(flaky_action, "测试调用时", attempts=3, delay_seconds=0),
+            "ok",
+        )
+        self.assertEqual(calls, 3)
+
     def test_safe_file_stem(self):
         self.assertEqual(main.safe_file_stem(Path("一次对话.m4a")), "一次对话")
         self.assertEqual(main.safe_file_stem(Path("bad:name?.wav")), "bad_name_")

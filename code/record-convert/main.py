@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 
 REGION_ID = "cn-shanghai"
@@ -23,6 +23,12 @@ SAMPLE_RATE = 8_000
 CHUNK_SECONDS = 3_600
 POLL_SECONDS = 10
 SIGNED_URL_SECONDS = 6 * 60 * 60
+ACS_CONNECT_TIMEOUT_SECONDS = 10
+ACS_READ_TIMEOUT_SECONDS = 30
+NETWORK_RETRY_ATTEMPTS = 4
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,27 @@ def required_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"缺少环境变量 {name}")
     return value
+
+
+def retry_call(
+    action: Callable[[], T],
+    description: str,
+    attempts: int = NETWORK_RETRY_ATTEMPTS,
+    delay_seconds: float = 3,
+) -> T:
+    """重试可安全重复的网络调用，不输出可能含凭据的异常正文。"""
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except Exception as exc:
+            if attempt == attempts:
+                raise
+            print(
+                f"  警告：{description}网络失败（{type(exc).__name__}），"
+                f"{delay_seconds:g} 秒后重试 {attempt}/{attempts - 1}……"
+            )
+            time.sleep(delay_seconds)
+    raise AssertionError("retry_call reached an unreachable state")
 
 
 def safe_file_stem(input_path: Path) -> str:
@@ -185,9 +212,18 @@ def make_acs_client(settings: Settings):
             settings.access_key_secret,
             settings.security_token,
         )
-        return AcsClient(region_id=REGION_ID, credential=credential)
+        return AcsClient(
+            region_id=REGION_ID,
+            credential=credential,
+            connect_timeout=ACS_CONNECT_TIMEOUT_SECONDS,
+            timeout=ACS_READ_TIMEOUT_SECONDS,
+        )
     return AcsClient(
-        settings.access_key_id, settings.access_key_secret, REGION_ID
+        settings.access_key_id,
+        settings.access_key_secret,
+        REGION_ID,
+        connect_timeout=ACS_CONNECT_TIMEOUT_SECONDS,
+        timeout=ACS_READ_TIMEOUT_SECONDS,
     )
 
 
@@ -200,7 +236,13 @@ def create_nls_token(settings: Settings) -> str:
     request.set_version("2019-02-28")
     request.set_action_name("CreateToken")
     request.set_protocol_type("https")
-    response = json.loads(make_acs_client(settings).do_action_with_exception(request))
+    client = make_acs_client(settings)
+    response = json.loads(
+        retry_call(
+            lambda: client.do_action_with_exception(request),
+            "创建 NLS Token 时",
+        )
+    )
     token = response.get("Token", {}).get("Id")
     if not token:
         raise RuntimeError(f"获取 NLS Token 失败：{redact_response(response)}")
@@ -210,16 +252,30 @@ def create_nls_token(settings: Settings) -> str:
 def upload_chunks(settings: Settings, chunks: list[AudioChunk]):
     bucket = make_oss_bucket(settings)
     uploaded: list[tuple[str, str]] = []
+    attempted_keys: list[str] = []
     print("[2/6] 上传分片到私有 OSS……")
     print(f"  OSS 临时目录：oss://{settings.oss_bucket}/{settings.oss_prefix.rstrip('/')}/")
-    for chunk in chunks:
-        object_key = f"{settings.oss_prefix.rstrip('/')}/{chunk.path.name}"
-        bucket.put_object_from_file(object_key, str(chunk.path))
-        signed_url = bucket.sign_url(
-            "GET", object_key, SIGNED_URL_SECONDS, slash_safe=True
-        )
-        uploaded.append((object_key, signed_url))
-        print(f"  已上传 {chunk.path.name}（链接已隐藏）")
+    try:
+        for chunk in chunks:
+            object_key = f"{settings.oss_prefix.rstrip('/')}/{chunk.path.name}"
+            attempted_keys.append(object_key)
+            retry_call(
+                lambda: bucket.put_object_from_file(object_key, str(chunk.path)),
+                f"上传 {chunk.path.name} 时",
+            )
+            signed_url = bucket.sign_url(
+                "GET", object_key, SIGNED_URL_SECONDS, slash_safe=True
+            )
+            uploaded.append((object_key, signed_url))
+            print(f"  已上传 {chunk.path.name}（链接已隐藏）")
+    except Exception:
+        print("  上传未完成，清理本次可能已写入的 OSS 分片……")
+        for object_key in attempted_keys:
+            retry_call(
+                lambda key=object_key: bucket.delete_object(key),
+                "清理上传失败的 OSS 分片时",
+            )
+        raise
     return bucket, uploaded
 
 
@@ -266,7 +322,12 @@ class FileTransClient:
         while True:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"等待识别任务 {task_id} 超时")
-            response = json.loads(self.client.do_action_with_exception(request))
+            response = json.loads(
+                retry_call(
+                    lambda: self.client.do_action_with_exception(request),
+                    f"查询识别任务 {task_id} 时",
+                )
+            )
             status = response.get("StatusText")
             if status != previous_status:
                 print(f"  任务 {task_id}: {status}")
@@ -529,7 +590,11 @@ def identify_genders(
                     f"chunk-{chunk.index:02d}-channel-{channel}-sample-{sample_index}.pcm"
                 )
                 extract_pcm(chunk.path, sentence, pcm_path)
-                result = identifier.identify(pcm_path)
+                result = retry_call(
+                    lambda: identifier.identify(pcm_path),
+                    f"识别 {chunk.path.name} / ChannelId {channel} 性别时",
+                    attempts=3,
+                )
                 result.update(
                     {
                         "chunk_index": chunk.index,
@@ -768,19 +833,30 @@ def main() -> int:
     finally:
         if completed and not args.keep_remote_chunks:
             for object_key, _ in uploads:
-                bucket.delete_object(object_key)
+                retry_call(
+                    lambda key=object_key: bucket.delete_object(key),
+                    "删除 OSS 临时分片时",
+                )
             print("已删除程序上传的 OSS 临时分片")
         if completed and not args.keep_work:
             shutil.rmtree(work_dir, ignore_errors=True)
     return 0
 
 
-if __name__ == "__main__":
+def cli() -> int:
+    """命令行入口；避免第三方 SDK traceback 泄露签名 URL 或凭据标识。"""
     try:
-        raise SystemExit(main())
+        return main()
     except KeyboardInterrupt:
         print("已中断；已上传的临时分片未自动删除，请按 OSS_PREFIX 检查。", file=sys.stderr)
-        raise SystemExit(130)
+        return 130
     except Exception as exc:
-        print(f"错误：{exc}", file=sys.stderr)
-        raise SystemExit(1)
+        print(
+            f"错误：{type(exc).__name__}（异常详情已隐藏，避免泄露凭据或签名 URL）",
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
