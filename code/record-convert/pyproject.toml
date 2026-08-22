@@ -9,3 +9,13 @@ dependencies = [
     "aliyun-python-sdk-core>=2.16.0",
     "oss2>=2.19.1",
 ]
+
+[project.scripts]
+record-convert = "main:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main"]

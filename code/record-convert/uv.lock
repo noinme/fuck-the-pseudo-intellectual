@@ -507,7 +507,7 @@ wheels = [
 [[package]]
 name = "record-convert"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "alibaba-nls-python-sdk" },
     { name = "aliyun-python-sdk-core" },
